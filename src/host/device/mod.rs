@@ -99,6 +99,10 @@ where
         self.configure_sem.try_acquire_arc().map(ConfigureSemaphore)
     }
 
+    pub async fn async_acquire_cfg_sem(&self) -> ConfigureSemaphore {
+        ConfigureSemaphore(self.configure_sem.acquire_arc().await)
+    }
+
     async fn post_usb_request(&self, request: USBRequest) {
         self.request_channel
             .write()

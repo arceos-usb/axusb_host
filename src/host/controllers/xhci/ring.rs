@@ -62,7 +62,7 @@ impl<O: PlatformAbstractions> Ring<O> {
         self.trbs[self.i].copy_from_slice(&trb);
         let addr = self.trbs[self.i].as_ptr() as usize;
 
-        // #[cfg(feature = "trace_xhci_enque_trb")]
+        #[cfg(feature = "trace_xhci_enque_trb")]
         trace!(
                 "enqueued {} @{:#X}\n{:x}\n{:x}\n{:x}\n{:x}\n------------------------------------------------",
                 self.i, addr, trb[0], trb[1], trb[2], trb[3]

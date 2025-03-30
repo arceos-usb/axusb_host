@@ -119,7 +119,6 @@ where
         debug!("{TAG} Halted");
 
         let o = &mut regs.operational;
-        // debug!("xhci stat: {:?}", o.usbsts.read_volatile());
 
         debug!("{TAG} Wait for ready...");
         while o.usbsts.read_volatile().controller_not_ready() {}
@@ -635,6 +634,7 @@ where
             crate::usb::operations::RequestedOperation::NOOP => {
                 debug!("{TAG}-device {:#?} transfer nope!", slot)
             }
+            crate::usb::operations::RequestedOperation::EnableEndpoints(endpoints) => todo!(),
         }
     }
 

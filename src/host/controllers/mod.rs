@@ -24,7 +24,6 @@ where
 
     fn init(&self);
 
-    /// each device should able to access actual transfer function in controller
     fn device_accesses(&self) -> &Vec<Arc<USBDevice<O, RING_BUFFER_SIZE>>>;
 
     fn workaround(&'a self) -> BoxFuture<'a, ()>;

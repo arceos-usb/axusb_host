@@ -2,7 +2,7 @@ pub mod configurations;
 pub mod isoch;
 use core::fmt::Debug;
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use bulk::BulkTransfer;
 use control::ControlTransfer;
 use futures::channel::oneshot::Sender;
@@ -10,6 +10,9 @@ use interrupt::InterruptTransfer;
 use isoch::IsochTransfer;
 use nosy::{Listen, Listener, Sink};
 use num_derive::FromPrimitive;
+use usb_descriptor_decoder::descriptors::{
+    desc_endpoint::Endpoint, topological_desc::TopologicalUSBDescriptorFunction,
+};
 
 use crate::host::device::ConfigureSemaphore;
 
@@ -85,6 +88,7 @@ pub enum RequestedOperation {
     Interrupt(InterruptTransfer),
     Isoch(IsochTransfer),
     InitializeDevice(TopologyRoute),
+    EnableEndpoints(Vec<Endpoint>),
     #[default]
     NOOP,
 }
