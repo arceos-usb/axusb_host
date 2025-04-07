@@ -37,3 +37,4 @@ async-trait = "0.1.85"
 lazy_static = "1.5.0"
 squeak = "0.2.0"
 nosy = {version = "0.1.0",default-features = false,features = ["async"]}
+dynamic_join_array = "0.1.3"

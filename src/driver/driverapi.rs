@@ -1,9 +1,11 @@
 use core::future::Future;
+use core::pin::Pin;
 
 use alloc::boxed::Box;
 use alloc::{string::String, sync::Arc};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use dynamic_join_array::NoEndFuture;
 use embassy_futures::select;
 use futures::task::FutureObj;
 
@@ -27,10 +29,10 @@ where
     fn name(&self) -> &'a str;
 }
 
-#[async_trait]
 pub trait USBSystemDriverModuleInstanceFunctionalInterface<'a, O>: Send + Sync
 where
     O: PlatformAbstractions,
 {
-    async fn run(&mut self);
+    fn run(&'a mut self) -> Pin<Box<dyn NoEndFuture + Send + Sync>>;
+    fn pre_drop(&'a self);
 }

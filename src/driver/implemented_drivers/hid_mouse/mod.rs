@@ -1,5 +1,13 @@
+use core::{
+    future::{Future, IntoFuture},
+    pin::Pin,
+};
+
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_lock::RwLock;
+use dynamic_join_array::NoEndFuture;
+use embassy_futures::yield_now;
+use futures::FutureExt;
 use log::{info, trace, warn};
 use usb_descriptor_decoder::descriptors::{
     desc_device::StandardUSBDeviceClassCode,
@@ -104,13 +112,51 @@ where
     alt_interface: u8,
 }
 
-#[async_trait::async_trait]
 impl<'a, O, const RING_BUFFER_SIZE: usize> USBSystemDriverModuleInstanceFunctionalInterface<'a, O>
     for HIDMouseModuleInstance<O, RING_BUFFER_SIZE>
 where
     O: PlatformAbstractions,
+    'a: 'static,
 {
-    async fn run(&mut self) {
+    fn run(&'a mut self) -> Pin<Box<dyn NoEndFuture + Send + Sync>> {
+        let future = Box::pin(self.get_fut().into_future());
+
+        Box::pin(NoEndMouseInatanceFuture {
+            ref_to_instance: future,
+        })
+    }
+
+    fn pre_drop(&'a self) {
+        todo!()
+    }
+}
+
+pub struct NoEndMouseInatanceFuture {
+    ref_to_instance: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+}
+
+impl NoEndFuture for NoEndMouseInatanceFuture {}
+
+impl Future for NoEndMouseInatanceFuture {
+    type Output = ();
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        match this.ref_to_instance.poll_unpin(cx) {
+            core::task::Poll::Ready(_) => panic!("driver instance should not end its job!"),
+            core::task::Poll::Pending => core::task::Poll::Pending,
+        }
+    }
+}
+
+impl<O, const RING_BUFFER_SIZE: usize> HIDMouseModuleInstance<O, RING_BUFFER_SIZE>
+where
+    O: PlatformAbstractions,
+{
+    pub async fn get_fut(&mut self) {
         trace!("hid mouse driver instance running...");
         let (i, o, e) = {
             let find_map = self
@@ -161,6 +207,10 @@ where
                 return ();
             }
             success => {}
+        }
+
+        loop {
+            yield_now().await
         }
     }
 }
