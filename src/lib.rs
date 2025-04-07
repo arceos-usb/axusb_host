@@ -14,7 +14,13 @@
 extern crate match_cfg;
 
 use abstractions::{PlatformAbstractions, USBSystemConfig};
-use alloc::{boxed::Box, collections::btree_map::BTreeMap, string::String, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::btree_map::BTreeMap,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use async_lock::{OnceCell, RwLock};
 use driver::driverapi::USBSystemDriverModule;
 use embassy_futures::block_on;
@@ -27,6 +33,7 @@ use host::controllers::Controller;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use usb::functional_interface::USBLayer;
+use usb_descriptor_decoder::DescriptorDecoder;
 
 extern crate alloc;
 
@@ -45,6 +52,7 @@ where
     controller: Box<dyn Controller<'a, O, RING_BUFFER_SIZE>>,
     usb_layer: USBLayer<'a, O, RING_BUFFER_SIZE>,
     event_bus: Arc<EventBus<'a, O, RING_BUFFER_SIZE>>,
+    desc_decoder: Arc<RwLock<DescriptorDecoder>>,
 }
 
 impl<'a, O, const RING_BUFFER_SIZE: usize> USBSystem<'a, O, RING_BUFFER_SIZE>
@@ -59,12 +67,23 @@ where
             host::controllers::initialize_controller(config.clone(), event_bus.clone());
         let usb_layer = USBLayer::new(config.clone(), event_bus.clone());
 
-        USBSystem {
+        let mut usbsystem = USBSystem {
             config,
             controller,
             usb_layer,
             event_bus,
+            desc_decoder: Arc::new(RwLock::new(DescriptorDecoder::new())),
+        };
+
+        #[cfg(feature = "packed-drivers")]
+        {
+            usbsystem.plug_driver_module(
+                "hid-mouse".to_string(),
+                Box::new(driver::implemented_drivers::hid_mouse::HIDMouseModule {}),
+            );
         }
+
+        usbsystem
     }
 
     pub fn plug_driver_module(
@@ -78,14 +97,19 @@ where
         self
     }
 
-    pub fn stage_1_start_controller(&self) -> &Self {
+    pub fn stage_1_start_controller(&'a self) -> &Self {
+        self.event_bus.pre_initialize_device.subscribe(|dev| {
+            trace!("adding decoder ref to device!");
+            block_on(dev.add_decoder(self.desc_decoder.clone()));
+            squeak::Response::StaySubscribed
+        });
         self.controller.init();
         info!("controller init complete!");
         self
     }
 
     pub fn stage_2_initialize_usb_layer(&'a self) -> &'a Self {
-        self.event_bus.new_initialized_device.subscribe(|dev| {
+        self.event_bus.post_initialized_device.subscribe(|dev| {
             self.usb_layer.new_device_initialized(dev);
             squeak::Response::StaySubscribed
         });
@@ -104,7 +128,7 @@ where
                 .map(|device| {
                     device.request_assign().then(|_| async {
                         self.event_bus
-                            .new_initialized_device
+                            .post_initialized_device
                             .broadcast(device.clone());
                     })
                 })

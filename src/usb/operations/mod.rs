@@ -10,9 +10,7 @@ use interrupt::InterruptTransfer;
 use isoch::IsochTransfer;
 use nosy::{Listen, Listener, Sink};
 use num_derive::FromPrimitive;
-use usb_descriptor_decoder::descriptors::{
-    desc_endpoint::Endpoint, topological_desc::TopologicalUSBDescriptorFunction,
-};
+use usb_descriptor_decoder::descriptors::desc_endpoint::Endpoint;
 
 use crate::host::device::ConfigureSemaphore;
 

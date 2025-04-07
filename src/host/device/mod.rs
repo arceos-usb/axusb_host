@@ -1,15 +1,19 @@
 use core::mem;
 
-use alloc::{borrow::ToOwned, sync::Arc};
+use alloc::{
+    borrow::ToOwned,
+    sync::Arc,
+    vec::{self, Vec},
+};
 
 use async_lock::{OnceCell, RwLock, Semaphore, SemaphoreGuardArc};
 use async_ringbuf::{traits::AsyncProducer, AsyncRb};
 use futures::{channel::oneshot, FutureExt};
 use log::{debug, info, trace};
 use nosy::Sink;
-use usb_descriptor_decoder::descriptors::{
-    parser::RawDescriptorParser, topological_desc::TopologicalUSBDescriptorRoot,
-    USBStandardDescriptorTypes,
+use usb_descriptor_decoder::{
+    descriptors::{desc_device::TopologyDeviceDesc, USBStandardDescriptorTypes},
+    DescriptorDecoder,
 };
 
 use crate::{
@@ -42,10 +46,12 @@ where
     pub slot_id: Arc<OnceCell<u8>>,
     pub vendor_id: OnceCell<u16>,
     pub product_id: OnceCell<u16>,
-    pub descriptor: OnceCell<Arc<TopologicalUSBDescriptorRoot>>,
+    pub descriptor: OnceCell<Arc<TopologyDeviceDesc>>,
     pub topology_path: TopologyRoute,
+    decoder_ref: OnceCell<Arc<RwLock<DescriptorDecoder>>>,
     configure_sem: Arc<Semaphore>,
     request_channel: RwLock<ArcAsyncRingBufPord<USBRequest, RING_BUFFER_SIZE>>,
+    pub current_config: u8,
 }
 
 pub enum DeviceState {
@@ -90,9 +96,15 @@ where
                 topology_path: TopologyRoute::new(),
                 slot_id: once_cell.clone(),
                 config: cfg,
+                decoder_ref: OnceCell::new(),
+                current_config: 1,
             },
             once_cell,
         )
+    }
+
+    pub async fn add_decoder(&self, decoder: Arc<RwLock<DescriptorDecoder>>) {
+        self.decoder_ref.set(decoder).await;
     }
 
     pub fn acquire_cfg_sem(&self) -> Option<ConfigureSemaphore> {
@@ -185,7 +197,7 @@ where
         trace!("switch device state into assigned!");
         trace!("device initialize complete, now request device desc...");
 
-        let (num_of_configs, mut parser) = {
+        let device = {
             let buffer_device: DMA<[u8], O> =
                 DMA::new_vec(0u8, O::PAGE_SIZE, O::PAGE_SIZE, self.config.os.dma_alloc());
 
@@ -215,13 +227,19 @@ where
                 drop(sem);
             }
 
-            let mut parser = RawDescriptorParser::new(buffer_device.to_owned());
-            parser.single_state_cycle();
-            (parser.num_of_configs(), parser)
+            DescriptorDecoder::peek_device_desc(buffer_device.to_vec()).unwrap()
         };
+        trace!("peeked device! {:#?}", device);
 
+        let mut cfgs = Vec::new();
         let mut sem = self.configure_sem.acquire_arc().await;
-        for index in 0..num_of_configs {
+
+        trace!("fetching decoder ref!");
+        let parser = self.decoder_ref.wait().await.read().await;
+        trace!("fetched decoder");
+
+        for index in 0..device.num_configurations {
+            trace!("now at cfg index {index}");
             let buffer: DMA<[u8], O> =
                 DMA::new_vec(0u8, O::PAGE_SIZE, O::PAGE_SIZE, self.config.os.dma_alloc());
             self.post_usb_request(USBRequest {
@@ -234,7 +252,7 @@ where
                     request: bRequest::Standard(bRequestStandard::GetDescriptor),
                     index: 0,
                     value: construct_control_transfer_type(
-                        USBStandardDescriptorTypes::Device as u8,
+                        USBStandardDescriptorTypes::Configuration as u8,
                         index as _,
                     )
                     .bits(),
@@ -246,13 +264,21 @@ where
             })
             .await;
             sem = self.configure_sem.acquire_arc().await;
-            parser.append_config(buffer.to_owned());
+            if let Ok(mut dev) = parser.parse_config(&buffer.to_vec()) {
+                // cfgs.append(&mut dev.configs);
+                cfgs.push(dev.0);
+            };
         }
-        trace!("try to parse device descriptor!");
-        self.descriptor
-            .set(parser.summarize().into())
-            .await
-            .unwrap();
+
+        trace!("desc decode complete!");
+
+        let _ = self
+            .descriptor
+            .set(Arc::new(TopologyDeviceDesc {
+                desc: device,
+                configs: cfgs,
+            }))
+            .await;
         debug!("parsed device desc: {:#?}", self.descriptor)
     }
 }

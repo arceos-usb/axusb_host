@@ -25,7 +25,7 @@ use inner_urb::XHCICompleteAction;
 use log::{debug, error, info, trace, warn};
 use ring::Ring;
 use ringbuf::traits::{Consumer, Split};
-use usb_descriptor_decoder::descriptors::USBStandardDescriptorTypes;
+use usb_descriptor_decoder::{descriptors::USBStandardDescriptorTypes, DescriptorDecoder};
 use xhci::{
     accessor::Mapper,
     context::{DeviceHandler, EndpointState, Input, InputHandler},
@@ -340,7 +340,9 @@ where
                     .topology_path
                     .append_port_number((port_idx + 1) as _);
 
-                unsafe { self.devices.get().as_mut_unchecked() }.push(usbdevice.into());
+                let devref: Arc<_> = usbdevice.into();
+                unsafe { self.devices.get().as_mut_unchecked() }.push(devref.clone());
+                self.event_bus.pre_initialize_device.broadcast(devref);
                 unsafe { self.requests.get().as_mut_unchecked() }.push(Receiver {
                     slot: slot_ref,
                     receiver: cons,

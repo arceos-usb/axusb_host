@@ -1,3 +1,3 @@
 pub mod driverapi;
 #[cfg(feature = "packed-drivers")]
-mod implemented_drivers;
+pub mod implemented_drivers;

@@ -12,7 +12,8 @@ pub struct EventBus<'a, O, const RING_BUFFER_SIZE: usize>
 where
     O: PlatformAbstractions,
 {
-    pub new_initialized_device: Delegate<'a, Arc<USBDevice<O, RING_BUFFER_SIZE>>>,
+    pub pre_initialize_device: Delegate<'a, Arc<USBDevice<O, RING_BUFFER_SIZE>>>,
+    pub post_initialized_device: Delegate<'a, Arc<USBDevice<O, RING_BUFFER_SIZE>>>,
     pub pre_drop_device: Delegate<'a, Arc<USBDevice<O, RING_BUFFER_SIZE>>>,
     pub new_interface: Delegate<
         'a,
@@ -41,9 +42,10 @@ where
 {
     pub fn new() -> Self {
         Self {
-            new_initialized_device: Delegate::new(),
+            post_initialized_device: Delegate::new(),
             pre_drop_device: Delegate::new(),
             new_interface: Delegate::new(),
+            pre_initialize_device: Delegate::new(),
         }
     }
 }
