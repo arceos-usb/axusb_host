@@ -264,9 +264,8 @@ where
             })
             .await;
             sem = self.configure_sem.acquire_arc().await;
-            if let Ok(mut dev) = parser.parse_config(&buffer.to_vec()) {
-                // cfgs.append(&mut dev.configs);
-                cfgs.push(dev.0);
+            if let Ok(cfg) = parser.parse_config(&buffer.to_vec()) {
+                cfgs.push(cfg.0);
             };
         }
 

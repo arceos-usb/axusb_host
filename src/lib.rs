@@ -26,7 +26,7 @@ use driver::driverapi::USBSystemDriverModule;
 use embassy_futures::block_on;
 use event::EventBus;
 use futures::{
-    future::{join, join_all},
+    future::{join, join3, join_all},
     join, FutureExt,
 };
 use host::controllers::Controller;
@@ -143,9 +143,10 @@ where
         //TODO structure run logic
         // join(self.controller.workaround(), self.usb_layer.workaround()).await
         info!("usb system workaround...");
-        join(
+        join3(
             self.inner_stage_3_initial_controller_polling_and_deivces(),
             self.controller.workaround(),
+            self.usb_layer.functional_interface_workaround(),
         )
         .await;
     }

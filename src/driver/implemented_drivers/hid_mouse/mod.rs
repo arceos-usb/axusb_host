@@ -1,6 +1,6 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_lock::RwLock;
-use log::{info, warn};
+use log::{info, trace, warn};
 use usb_descriptor_decoder::descriptors::{
     desc_device::StandardUSBDeviceClassCode,
     desc_endpoint::Endpoint,
@@ -37,7 +37,9 @@ where
             >,
         >,
     > {
-        let map = device
+        trace!("testing device if it's hid mouse...");
+
+        device
             .descriptor
             .get()
             .unwrap()
@@ -57,13 +59,16 @@ where
                 }
                 _ => None,
             })
-            .map(|intf| HIDMouseModuleInstance {
-                device_ref: device.clone(),
-                interface: intf.interface.interface,
-                alt_interface: intf.interface.alternate_setting,
-            })
-            .unwrap();
-        return Some(Arc::new(RwLock::new(map)));
+            .map(
+                |intf| -> Arc<RwLock<dyn USBSystemDriverModuleInstanceFunctionalInterface<'a, O>>> {
+                    trace!("yes it is!");
+                    Arc::new(RwLock::new(HIDMouseModuleInstance {
+                        device_ref: device.clone(),
+                        interface: intf.interface.interface,
+                        alt_interface: intf.interface.alternate_setting,
+                    }))
+                },
+            )
     }
 
     //
@@ -106,6 +111,7 @@ where
     O: PlatformAbstractions,
 {
     async fn run(&mut self) {
+        trace!("hid mouse driver instance running...");
         let (i, o, e) = {
             let find_map = self
                 .device_ref

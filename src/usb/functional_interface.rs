@@ -78,4 +78,6 @@ where
 
         info!("initialized new device!");
     }
+
+    pub async fn functional_interface_workaround(&self) {}
 }
