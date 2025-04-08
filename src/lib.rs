@@ -110,7 +110,7 @@ where
 
     pub fn stage_2_initialize_usb_layer(&'a self) -> &'a Self {
         self.event_bus.post_initialized_device.subscribe(|dev| {
-            self.usb_layer.new_device_initialized(dev);
+            self.usb_layer.new_device_initialized(dev.clone());
             squeak::Response::StaySubscribed
         });
 

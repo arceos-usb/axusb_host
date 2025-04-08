@@ -23,9 +23,17 @@ use futures::{
 };
 use inner_urb::XHCICompleteAction;
 use log::{debug, error, info, trace, warn};
+use num_traits::{FromPrimitive, ToPrimitive};
 use ring::Ring;
 use ringbuf::traits::{Consumer, Split};
-use usb_descriptor_decoder::{descriptors::USBStandardDescriptorTypes, DescriptorDecoder};
+use usb_descriptor_decoder::{
+    descriptors::{
+        desc_endpoint::{Endpoint, EndpointType},
+        desc_interface::USBInterface,
+        USBStandardDescriptorTypes,
+    },
+    DescriptorDecoder,
+};
 use xhci::{
     accessor::Mapper,
     context::{DeviceHandler, EndpointState, Input, InputHandler},
@@ -33,7 +41,7 @@ use xhci::{
     ring::trb::{
         command::{self},
         event::{self, CommandCompletion, CompletionCode},
-        transfer::{self, TransferType},
+        transfer::{self, Normal, TransferType},
     },
 };
 
@@ -46,7 +54,8 @@ use crate::{
             bRequest, bRequestStandard, bmRequestType, construct_control_transfer_type,
             ControlTransfer, DataTransferType, Recipient,
         },
-        CompleteAction, Direction, RequestResult, USBRequest,
+        interrupt::InterruptTransfer,
+        CompleteAction, Direction, ExtraAction, RequestResult, USBRequest,
     },
 };
 
@@ -62,6 +71,7 @@ pub type RegistersExtList = xhci::extended_capabilities::List<MemMapper>;
 pub type SupportedProtocol = XhciSupportedProtocol<MemMapper>;
 
 const TAG: &str = "[XHCI]";
+const CONTROL_DCI: usize = 1;
 
 #[derive(Clone)]
 pub struct MemMapper;
@@ -97,7 +107,7 @@ where
     devices: SyncUnsafeCell<Vec<Arc<USBDevice<O, RING_BUFFER_SIZE>>>>,
     requests: SyncUnsafeCell<Vec<Receiver<RING_BUFFER_SIZE>>>,
     finish_jobs: RwLock<BTreeMap<usize, XHCICompleteAction>>,
-    extra_works: SyncUnsafeCell<BTreeMap<usize, USBRequest>>,
+    extra_works: SyncUnsafeCell<BTreeMap<usize, (&'a OnceCell<u8>, USBRequest)>>,
     event_bus: Arc<EventBus<'a, O, RING_BUFFER_SIZE>>,
 }
 
@@ -571,18 +581,10 @@ where
                     };
                 })
                 .await
-        } else if unsafe { self.extra_works.get().as_ref_unchecked() }.contains_key(&addr) {
-            let extra_works = unsafe { self.extra_works.get().as_mut_unchecked() };
-            match extra_works
-                .get_mut(&addr)
-                .map(|req| &req.complete_action)
-                .unwrap()
-            {
-                // CompleteAction::KeepResponse(async_wrap) => {
-                //     async_wrap.notify(&code.map(|a| a.into()).map_err(|a| a as _));
-                // }
-                _ => panic!("oneshot job appeared at extra works zone!"),
-            }
+        } else if let Some((slot, morereq)) =
+            unsafe { self.extra_works.get().as_mut_unchecked() }.remove(&addr)
+        {
+            self.post_transfer(morereq, slot).await
         }
     }
 
@@ -606,15 +608,72 @@ where
             .await;
     }
 
+    async fn post_control_transfer(
+        &self,
+        control_transfer: ControlTransfer,
+        cmp: CompleteAction,
+        slot: u8,
+    ) {
+        let key = self.control_transfer(slot, control_transfer).await;
+        self.finish_jobs.write().await.insert(key, cmp.into());
+    }
+
+    async fn post_interrupt_transfer(
+        &self,
+        transfer: &InterruptTransfer,
+        cmp: Option<CompleteAction>,
+        slot: &OnceCell<u8>,
+    ) -> usize {
+        let key = self
+            .interrupt_transfer(*unsafe { slot.get_unchecked() }, transfer)
+            .await;
+        if let Some(cmp) = cmp {
+            self.finish_jobs.write().await.insert(key, cmp.into());
+        }
+        key
+    }
+
     #[allow(unused_variables)]
-    async fn post_transfer(&self, req: USBRequest, slot: &OnceCell<u8>) {
+    async fn post_transfer(&self, req: USBRequest, slot: &'a OnceCell<u8>) {
         match req.operation {
             crate::usb::operations::RequestedOperation::Control(control_transfer) => {
+                let slot = unsafe { slot.get_unchecked().clone() };
                 self.post_control_transfer(control_transfer, req.complete_action, slot) //purpose: avoid cycle dependency
                     .await;
             }
             crate::usb::operations::RequestedOperation::Bulk(bulk_transfer) => todo!(),
-            crate::usb::operations::RequestedOperation::Interrupt(interrupt_transfer) => todo!(),
+            crate::usb::operations::RequestedOperation::Interrupt(interrupt_transfer) => {
+                match req.extra_action {
+                    ExtraAction::NOOP => {
+                        let key = self
+                            .post_interrupt_transfer(
+                                &interrupt_transfer,
+                                Some(req.complete_action),
+                                slot,
+                            )
+                            .await;
+                    }
+                    ExtraAction::KeepFill => {
+                        let key = self
+                            .post_interrupt_transfer(&interrupt_transfer, None, slot)
+                            .await;
+                        unsafe { self.extra_works.get().as_mut_unchecked() }.insert(
+                            key,
+                            (
+                                slot.clone(),
+                                USBRequest {
+                                    extra_action: req.extra_action,
+                                    operation:
+                                        crate::usb::operations::RequestedOperation::Interrupt(
+                                            interrupt_transfer,
+                                        ),
+                                    complete_action: CompleteAction::NOOP,
+                                },
+                            ), //reason: KeepFill must use NOOP CompleteAction
+                        );
+                    }
+                }
+            }
             crate::usb::operations::RequestedOperation::Isoch(isoch_transfer) => todo!(),
             crate::usb::operations::RequestedOperation::InitializeDevice(route) => {
                 let dev = unsafe { self.devices.get().as_ref_unchecked() }
@@ -636,25 +695,138 @@ where
             crate::usb::operations::RequestedOperation::NOOP => {
                 debug!("{TAG}-device {:#?} transfer nope!", slot)
             }
-            crate::usb::operations::RequestedOperation::EnableEndpoints(endpoints) => todo!(),
+            crate::usb::operations::RequestedOperation::EnableFunction(config_val, interface) => {
+                let slot = unsafe { slot.get_unchecked().clone() };
+                self.enable_function(slot, config_val, interface).await;
+                trace!("enable function for slot complete!");
+                if let CompleteAction::DropSem(sem) = req.complete_action {
+                    drop(sem);
+                } else {
+                }
+            }
+        }
+    }
+    async fn enable_function(&self, slot_id: u8, config: u8, interface: Arc<USBInterface>) {
+        let input_addr: u64 = {
+            let mut writer = self.dev_ctx.write().await;
+            let ctx = writer.device_ctx_inners.get_mut(&slot_id).unwrap();
+            let input_access = ctx.in_ctx.access();
+            {
+                let control_mut = input_access.control_mut();
+                control_mut.clear_all_nonep0_add_flag();
+                control_mut.set_add_context_flag(0);
+                control_mut.set_configuration_value(config);
+
+                control_mut.set_interface_number(interface.interface.interface_number);
+                control_mut.set_alternate_setting(interface.interface.alternate_setting);
+            }
+            let entries = interface
+                .endpoints
+                .iter()
+                .map(|endpoint| endpoint.doorbell_value_aka_dci())
+                .max()
+                .unwrap_or(1);
+
+            input_access
+                .device_mut()
+                .slot_mut()
+                .set_context_entries(entries as u8);
+
+            O::PhysAddr::from(ctx.in_ctx.addr()).into() as _
+        };
+
+        trace!("input addr: {:x}", input_addr);
+
+        self.trace_dump_context(slot_id);
+
+        for ele in &interface.endpoints {
+            self.setup_endpoint(ele, slot_id).await
+        }
+
+        fence(Ordering::Release);
+        {
+            let request_result = self
+                .post_command(command::Allowed::ConfigureEndpoint(
+                    *command::ConfigureEndpoint::default()
+                        .set_slot_id(slot_id)
+                        .set_input_context_pointer(input_addr),
+                ))
+                .await;
+            trace!("got result: {:?}", request_result);
+            assert_eq!(
+                RequestResult::Success,
+                Into::<RequestResult>::into(request_result.completion_code().unwrap()),
+                "configure endpoint failed! {:#?}",
+                request_result
+            );
+        }
+
+        self.trace_dump_context(slot_id);
+
+        fence(Ordering::Release);
+    }
+
+    async fn setup_endpoint(&self, ep: &Arc<Endpoint>, slot: u8) {
+        let dci = ep.doorbell_value_aka_dci() as usize;
+        let max_packet_size = ep.max_packet_size;
+        trace!("setup endpoint for dci {dci} type {:?}", ep.endpoint_type());
+        let mut writer = self.dev_ctx.write().await;
+        trace!("fetched!");
+        let ring = writer.write_transfer_ring(slot, dci).unwrap();
+        let ring_addr = O::PhysAddr::from(ring.register()).into() as u64;
+
+        let ctx = writer.device_ctx_inners.get_mut(&slot).unwrap();
+        let input_access = ctx.in_ctx.access();
+
+        input_access.control_mut().set_add_context_flag(dci);
+
+        {
+            let slot_mut = input_access.device_mut().slot_mut();
+            if slot_mut.context_entries() < dci as _ {
+                slot_mut.set_context_entries(dci as _);
+            }
+        }
+
+        let ep_mut = input_access.device_mut().endpoint_mut(dci);
+        ep_mut.set_interval(ep.interval - 1);
+        ep_mut.set_endpoint_type(ep.endpoint_type().cast());
+        ep_mut.set_tr_dequeue_pointer(ring_addr);
+        ep_mut.set_max_packet_size(max_packet_size);
+        ep_mut.set_error_count(3);
+        ep_mut.set_dequeue_cycle_state();
+        let endpoint_type = ep.endpoint_type();
+        match endpoint_type {
+            EndpointType::Control => {}
+            EndpointType::BulkOut | EndpointType::BulkIn => {
+                ep_mut.set_max_burst_size(0);
+                ep_mut.set_max_primary_streams(0);
+            }
+            EndpointType::IsochOut
+            | EndpointType::IsochIn
+            | EndpointType::InterruptOut
+            | EndpointType::InterruptIn => {
+                //init for isoch/interrupt
+                ep_mut.set_max_packet_size(max_packet_size & 0x7ff); //refer xhci page 162
+                ep_mut.set_max_burst_size(((max_packet_size & 0x1800) >> 11).try_into().unwrap());
+                ep_mut.set_mult(0); //always 0 for interrupt
+
+                if let EndpointType::IsochOut | EndpointType::IsochIn = endpoint_type {
+                    ep_mut.set_error_count(0);
+                }
+
+                ep_mut.set_tr_dequeue_pointer(ring_addr);
+                ep_mut.set_max_endpoint_service_time_interval_payload_low(4);
+                //best guess?
+
+                ep_mut.set_interval(1); //need extra step?
+            }
+            EndpointType::NotValid => {
+                unreachable!("Not Valid Endpoint should not exist.")
+            }
         }
     }
 
-    async fn post_control_transfer(
-        &self,
-        control_transfer: ControlTransfer,
-        cmp: CompleteAction,
-        slot: &OnceCell<u8>,
-    ) {
-        let key = self
-            .control_transfer(*unsafe { slot.get_unchecked() }, control_transfer)
-            .await;
-        self.finish_jobs.write().await.insert(key, cmp.into());
-    }
-
     async fn assign_address_device(&self, device: &Arc<USBDevice<O, RING_BUFFER_SIZE>>) {
-        const CONTROL_DCI: usize = 1;
-
         let slot_id = self.enable_slot().await;
         debug!("slot id acquired! {slot_id} for {}", device.topology_path);
         let _ = device.slot_id.set(slot_id).await;
@@ -773,7 +945,7 @@ where
                     response: false,
                 },
                 CompleteAction::SimpleResponse(sender),
-                &device.slot_id,
+                unsafe { device.slot_id.get_unchecked().clone() },
             )
             .await;
 
@@ -884,6 +1056,32 @@ where
         todo!()
     }
 
+    async fn interrupt_transfer(&self, slot: u8, urb_req: &InterruptTransfer) -> usize {
+        let (addr, len) = urb_req.buffer_addr_len;
+
+        let trb_pointers: usize = {
+            let mut writer = self.dev_ctx.write().await;
+            trace!("fetch ring at slot{}", slot);
+            let ring = writer
+                .write_transfer_ring(slot, urb_req.endpoint_id as _)
+                .expect("initialization on transfer rings got some issue, fixit.");
+            ring.enque_transfer(transfer::Allowed::Normal(
+                *Normal::default()
+                    .set_data_buffer_pointer(addr as _)
+                    .set_trb_transfer_length(len as _)
+                    .set_interrupter_target(0)
+                    .set_interrupt_on_short_packet()
+                    .set_interrupt_on_completion(),
+            ))
+        }
+        .into();
+
+        fence(Ordering::Release);
+        self.ring_db(slot, None, Some(1));
+
+        0
+    }
+
     async fn control_transfer(&self, slot: u8, urb_req: ControlTransfer) -> usize {
         let direction = urb_req.request_type.direction;
         let buffer = urb_req.data;
@@ -937,7 +1135,7 @@ where
             let mut writer = self.dev_ctx.write().await;
             trace!("fetch ring at slot{}", slot);
             let ring = writer
-                .write_transfer_ring(slot, 0)
+                .write_transfer_ring(slot, CONTROL_DCI)
                 .expect("initialization on transfer rings got some issue, fixit.");
             trbs.into_iter()
                 .map(|trb| ring.enque_transfer(trb).into())

@@ -141,12 +141,12 @@ where
         (unsafe { self.dcbaa.get().read_volatile() }.as_ptr() as usize).into()
     }
 
-    pub fn write_transfer_ring(&mut self, slot: u8, channel: usize) -> Option<&mut Ring<O>> {
+    pub fn write_transfer_ring(&mut self, slot: u8, dci: usize) -> Option<&mut Ring<O>> {
         self.device_ctx_inners
             .get_mut(&(slot as _))
             .expect(format!("no such transfer ring at slot {slot}").as_str())
             .transfer_rings
-            .get_mut(channel)
+            .get_mut(dci - 1)
     }
 
     pub fn read_transfer_ring(&self, slot: u8, dci: usize) -> Option<&Ring<O>> {

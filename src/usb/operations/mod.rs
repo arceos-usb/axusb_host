@@ -10,7 +10,9 @@ use interrupt::InterruptTransfer;
 use isoch::IsochTransfer;
 use nosy::{Listen, Listener, Sink};
 use num_derive::FromPrimitive;
-use usb_descriptor_decoder::descriptors::desc_endpoint::Endpoint;
+use usb_descriptor_decoder::descriptors::{
+    desc_configuration::Configuration, desc_endpoint::Endpoint, desc_interface::USBInterface,
+};
 
 use crate::host::device::ConfigureSemaphore;
 
@@ -50,12 +52,12 @@ pub type ChannelNumber = u16;
 pub enum ExtraAction {
     #[default]
     NOOP,
-    KeepFill(ChannelNumber),
+    KeepFill,
 }
 
 type ValueResult = Result<RequestResult, u8>;
 pub type CallbackValue = Sender<ValueResult>; //todo: change this into a oneshot channel
-                                              // pub type KeepCallbackValue = <ValueResult>;
+                                              //                                               pub type KeepCallbackValue = <ValueResult>;
 
 // pub fn construct_keep_callback_listener() -> (
 //     nosy::Notifier<
@@ -86,7 +88,7 @@ pub enum RequestedOperation {
     Interrupt(InterruptTransfer),
     Isoch(IsochTransfer),
     InitializeDevice(TopologyRoute),
-    EnableEndpoints(Vec<Endpoint>),
+    EnableFunction(u8, Arc<USBInterface>), //config value, interface //sus, should we split enable configuration and enable interface as two part?
     #[default]
     NOOP,
 }

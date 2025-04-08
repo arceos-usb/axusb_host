@@ -12,7 +12,11 @@ use futures::{channel::oneshot, FutureExt};
 use log::{debug, info, trace};
 use nosy::Sink;
 use usb_descriptor_decoder::{
-    descriptors::{desc_device::TopologyDeviceDesc, USBStandardDescriptorTypes},
+    descriptors::{
+        desc_device::TopologyDeviceDesc,
+        desc_interface::{Interface, USBInterface},
+        USBStandardDescriptorTypes,
+    },
     DescriptorDecoder,
 };
 
@@ -140,6 +144,16 @@ where
         .await;
     }
 
+    pub async fn keep_no_response(&self, request: RequestedOperation, channel_number: u16) {
+        self.check_self_status().await;
+        self.post_usb_request(USBRequest {
+            operation: request,
+            extra_action: ExtraAction::KeepFill,
+            complete_action: CompleteAction::default(),
+        })
+        .await;
+    }
+
     ///I must lost my mind...
     pub async fn request_once(&self, request: RequestedOperation) -> Result<RequestResult, u8> {
         self.check_self_status().await;
@@ -180,6 +194,22 @@ where
         };
 
         self
+    }
+
+    pub async fn enable_function(&self, interface: Arc<USBInterface>) {
+        let sem = self.configure_sem.acquire_arc().await;
+        self.post_usb_request(USBRequest {
+            operation: crate::usb::operations::RequestedOperation::EnableFunction(
+                self.current_config,
+                interface,
+            ),
+            extra_action: ExtraAction::default(),
+            complete_action: CompleteAction::DropSem(ConfigureSemaphore(sem)),
+        })
+        .await;
+
+        trace!("enable interface success!");
+        *self.state.write().await = DeviceState::Configured;
     }
 
     pub async fn request_assign(&self) {
@@ -265,7 +295,7 @@ where
             .await;
             sem = self.configure_sem.acquire_arc().await;
             if let Ok(cfg) = parser.parse_config(&buffer.to_vec()) {
-                cfgs.push(cfg.0);
+                cfgs.push(cfg.0.into());
             };
         }
 
@@ -274,7 +304,7 @@ where
         let _ = self
             .descriptor
             .set(Arc::new(TopologyDeviceDesc {
-                desc: device,
+                desc: device.into(),
                 configs: cfgs,
             }))
             .await;

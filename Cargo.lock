@@ -462,7 +462,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "usb-descriptor-decoder"
 version = "0.1.0"
-source = "git+https://github.com/arceos-usb/usb-descriptor-decoder-rs.git?branch=modularize#60c95cfc8872367a3542304ec7998a4b49d64571"
+source = "git+https://github.com/arceos-usb/usb-descriptor-decoder-rs.git?branch=modularize#0fffae9b866585080d57097cea354b9767a69fef"
 dependencies = [
  "bit_field",
  "log",

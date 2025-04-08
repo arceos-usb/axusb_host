@@ -69,13 +69,13 @@ where
         usblayer
     }
 
-    pub fn new_device_initialized(&self, device: &Arc<USBDevice<O, RING_BUFFER_SIZE>>) {
+    pub fn new_device_initialized(&self, device: Arc<USBDevice<O, RING_BUFFER_SIZE>>) {
         self.driver_modules
             .values()
             .filter_map(
                 |module: &Box<dyn USBSystemDriverModule<'a, O, RING_BUFFER_SIZE>>| {
                     module
-                        .should_active(&device, &self.config)
+                        .should_active(device.clone(), &self.config)
                         .map(|a| (a, module.name()))
                 },
             )

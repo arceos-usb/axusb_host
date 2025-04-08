@@ -20,7 +20,7 @@ where
 {
     fn should_active(
         &self,
-        device: &Arc<USBDevice<O, RING_BUFFER_SIZE>>,
+        device: Arc<USBDevice<O, RING_BUFFER_SIZE>>,
         config: &Arc<USBSystemConfig<O, RING_BUFFER_SIZE>>,
     ) -> Option<Arc<RwLock<dyn USBSystemDriverModuleInstanceFunctionalInterface<'a, O>>>>;
 
