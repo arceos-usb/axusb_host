@@ -72,7 +72,7 @@ pub type CallbackValue = Sender<ValueResult>; //todo: change this into a oneshot
 //     (notifier, sink)
 // }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum CompleteAction {
     #[default]
     NOOP,

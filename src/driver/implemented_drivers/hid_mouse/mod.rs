@@ -5,9 +5,8 @@ use core::{
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_lock::{OnceCell, RwLock};
-use dynamic_join_array::NoEndFuture;
 use embassy_futures::yield_now;
-use futures::FutureExt;
+use futures::{task::AtomicWaker, FutureExt};
 use log::{info, trace, warn};
 use num_traits::Zero;
 use squeak::Response;
@@ -30,7 +29,7 @@ use crate::{
             ControlTransfer, DataTransferType, Recipient,
         },
         interrupt::InterruptTransfer,
-        Direction, RequestResult,
+        Direction, RequestResult, RequestedOperation,
     },
 };
 
@@ -135,40 +134,14 @@ where
     O: PlatformAbstractions,
     'a: 'static,
 {
-    fn run(&'a mut self) -> Pin<Box<dyn NoEndFuture + Send + Sync>> {
-        let future = Box::pin(self.work_fut().into_future());
-
-        Box::pin(NoEndMouseInatanceFuture {
-            ref_to_instance: future,
-        })
+    fn run(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> {
+        Box::pin(self.work_fut().into_future())
     }
 
     fn pre_drop(&'a self) {
         todo!()
     }
 }
-
-pub struct NoEndMouseInatanceFuture {
-    ref_to_instance: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
-}
-
-impl NoEndFuture for NoEndMouseInatanceFuture {}
-
-impl Future for NoEndMouseInatanceFuture {
-    type Output = ();
-
-    fn poll(
-        self: core::pin::Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
-    ) -> core::task::Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-        match this.ref_to_instance.poll_unpin(cx) {
-            core::task::Poll::Ready(_) => panic!("driver instance should not end its job!"),
-            core::task::Poll::Pending => core::task::Poll::Pending,
-        }
-    }
-}
-
 impl<'a, O, const RING_BUFFER_SIZE: usize> HIDMouseModuleInstance<O, RING_BUFFER_SIZE>
 where
     O: PlatformAbstractions,
@@ -274,33 +247,45 @@ where
             .unwrap()
             .next_power_of_two();
 
-        let hid_response: DMA<[u8], O> = DMA::new_vec(
+        let mut hid_response: DMA<[u8], O> = DMA::new_vec(
             0u8,
             aligned_size,
             aligned_size,
             self.device_ref.config.os.dma_alloc(),
         );
-
-        self.device_ref
-            .keep_no_response(
-                crate::usb::operations::RequestedOperation::Interrupt(InterruptTransfer {
+        trace!("prepare complete!");
+        loop {
+            let request_result = self
+                .device_ref
+                .request_once(RequestedOperation::Interrupt(InterruptTransfer {
                     endpoint_id: ep_id,
                     buffer_addr_len: hid_response.phys_addr_len_tuple().into(),
                     short_packet_ok: true,
-                }),
-                ep_id as _,
-            )
-            .await;
-
-        loop {
-            if hid_response.iter().any(|a| !a.is_zero())
-                && let Some(handler) = self.hid_report_decoder.get_mut()
-            {
-                let _ = handler
-                    .handle(&hid_response)
-                    .inspect(|ok| info!("response! {:#?}", ok));
-            }
-            yield_now().await
+                }))
+                .await;
+            trace!("result:{:#?}", request_result);
         }
+
+        // self.device_ref
+        //     .keep_no_response(
+        //         crate::usb::operations::RequestedOperation::Interrupt(InterruptTransfer {
+        //             endpoint_id: ep_id,
+        //             buffer_addr_len: hid_response.phys_addr_len_tuple().into(),
+        //             short_packet_ok: true,
+        //         }),
+        //         ep_id as _,
+        //     )
+        //     .await;
+
+        // loop {
+        //     if hid_response.iter().any(|a| !a.is_zero())
+        //         && let Some(handler) = self.hid_report_decoder.get_mut()
+        //     {
+        //         let _ = handler
+        //             .handle(&hid_response)
+        //             .inspect(|ok| info!("response! {:#?}", ok));
+        //     }
+        //     yield_now().await
+        // }
     }
 }

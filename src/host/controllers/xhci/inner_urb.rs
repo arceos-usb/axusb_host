@@ -5,6 +5,7 @@ use crate::usb::operations::CompleteAction;
 
 pub type XHCICommandCallbackValue = Sender<CommandCompletion>;
 
+#[derive(Debug)]
 pub enum XHCICompleteAction {
     CommandCallback(XHCICommandCallbackValue),
     STANDARD(CompleteAction),

@@ -149,8 +149,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 [[package]]
 name = "dynamic_join_array"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4079e8863a83bbf9a6aa92bcf3afefdec9c1eb6facf2e37295d0733d34fcb2cd"
+source = "git+https://github.com/dbydd/dynamic_join_array#ce39d3bd24fa7072abc7749572b89e2c3e8e4c1d"
 dependencies = [
  "async-lock",
  "futures",

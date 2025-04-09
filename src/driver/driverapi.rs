@@ -5,7 +5,6 @@ use alloc::boxed::Box;
 use alloc::{string::String, sync::Arc};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use dynamic_join_array::NoEndFuture;
 use embassy_futures::select;
 use futures::task::FutureObj;
 
@@ -33,6 +32,6 @@ pub trait USBSystemDriverModuleInstanceFunctionalInterface<'a, O>: Send + Sync
 where
     O: PlatformAbstractions,
 {
-    fn run(&'a mut self) -> Pin<Box<dyn NoEndFuture + Send + Sync>>;
+    fn run(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
     fn pre_drop(&'a self);
 }

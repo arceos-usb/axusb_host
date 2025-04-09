@@ -498,12 +498,13 @@ where
         let (event, cycle) = unsafe { self.event.get().as_mut_unchecked() }
             .async_next()
             .await;
-        debug!("{TAG}:[CMD] received event:{:?},cycle{cycle}", event);
+        debug!("{TAG}:[EVT] received event:{:?},cycle{cycle}", event);
 
         match event {
             event::Allowed::TransferEvent(transfer_event) => {
                 let addr = transfer_event.trb_pointer() as _;
                 //todo: transfer event trb had extra info compare to command event., should we split these two?
+                trace!("sending event complete program!");
 
                 self.mark_transfer_completed(transfer_event.completion_code(), addr)
                     .await;
@@ -550,14 +551,18 @@ where
 
     async fn mark_transfer_completed(&self, code: Result<CompletionCode, u8>, addr: usize) {
         //should compile to jump table?
+        trace!("received complete event of {:x}", addr);
         if self.finish_jobs.read().await.contains_key(&addr) {
+            trace!("indeed contains finish jobs!");
             self.finish_jobs
                 .write()
                 .then(|mut write| async move { write.remove(&addr).unwrap() })
                 .then(|action| async move {
+                    trace!("action is {:#?}", action);
                     match action {
                         XHCICompleteAction::STANDARD(CompleteAction::NOOP) => {}
                         XHCICompleteAction::STANDARD(CompleteAction::SimpleResponse(sender)) => {
+                            trace!("send complete!");
                             let _ = sender.send(code.map(|a| a.into()).map_err(|a| a as _));
                         }
                         XHCICompleteAction::STANDARD(CompleteAction::DropSem(
@@ -581,11 +586,14 @@ where
                     };
                 })
                 .await
-        } else if let Some((slot, morereq)) =
+        }
+        if let Some((slot, morereq)) =
             unsafe { self.extra_works.get().as_mut_unchecked() }.remove(&addr)
         {
             self.post_transfer(morereq, slot).await
         }
+
+        trace!("transfer event procress complete!");
     }
 
     async fn run_once(&'a self) {
@@ -628,6 +636,7 @@ where
             .interrupt_transfer(*unsafe { slot.get_unchecked() }, transfer)
             .await;
         if let Some(cmp) = cmp {
+            trace!("putting complete action on key{:x}!", key);
             self.finish_jobs.write().await.insert(key, cmp.into());
         }
         key
@@ -1077,9 +1086,9 @@ where
         .into();
 
         fence(Ordering::Release);
-        self.ring_db(slot, None, Some(1));
+        self.ring_db(slot, None, Some(urb_req.endpoint_id as _));
 
-        0
+        trb_pointers
     }
 
     async fn control_transfer(&self, slot: u8, urb_req: ControlTransfer) -> usize {
