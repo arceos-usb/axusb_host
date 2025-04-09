@@ -263,7 +263,12 @@ where
                     short_packet_ok: true,
                 }))
                 .await;
-            trace!("result:{:#?}", request_result);
+
+            if let Some(handler) = self.hid_report_decoder.get_mut() {
+                let _ = handler
+                    .handle(&hid_response)
+                    .inspect(|ok| info!("response! {:#?}", ok));
+            }
         }
 
         // self.device_ref
